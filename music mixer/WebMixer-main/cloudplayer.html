@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<HTML>
+<HEAD>
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	<meta http-equiv="Content-Script-Type" content="text/javascript">
+	<meta name="Keywords" content="webMIDIAPI,Controller,Alphabeat">
+	<title>Alphabeat Player</title>
+  <link href = "https://code.jquery.com/ui/1.10.4/themes/ui-lightness/jquery-ui.css" rel = "stylesheet">
+  <script src = "https://code.jquery.com/jquery-1.10.2.js"></script>
+  <script src = "https://code.jquery.com/ui/1.10.4/jquery-ui.js"></script>
+  <script type= "text/javascript" src="js/alphabeatmidiapi.js"></script>
+	<script type= "text/javascript" src="js/player.js"></script>
+  <script type= "text/javascript" src="js/sc-player.js"></script>
+  <script type= "text/javascript" src="js/wrapper.js"></script>
+  <script type= "text/javascript" src="js/helper.js"></script>
+  <script type= "text/javascript" src="https://w.soundcloud.com/player/api.js"></script>
+  <script type= "text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+</HEAD>
+<body style="background-color:rgb(166, 170, 169);">
+<table>
+  <tr>
+    <th>Deck 1</th>
+    <th></th>
+    <th>Deck 2</th>
+  </tr>
+  <tr>
+    <td><div class="pos"></div></td>
+    <td>
+      <input type="file" id="selector" accept=".mp3,.wav,.ogg,.flac,.csv" style="display: none;" multiple></td>
+    <td><div class="pos"></div></td>
+  </tr>
+  <tr>
+    <td><div class="SCpayer"></div><audio class="player" controls preload="metadata"></audio></td>
+    <td><input type="button" id="urlOpen" value="URL..." />
+        <input type="button" value="File..." onclick="document.getElementById('selector').click();" /></td>
+    <td><div class="SCpayer"></div><audio class="player" controls preload="metadata"></audio></td>
+  </tr>
+  <tr>
+    <td><div class="Pinfo"></div></td>
+    <td></td>
+    <td><div class="Pinfo"></div></td>
+  </tr>
+</table>
+<table>
+  <tr>
+    <td>
+    <select id="fileList" Size="20" style="width: 100%;" autofocus>
+      <option value="tracks/1276388710">Rhea Silvia - Carbon Birds</option>
+      <option value="tracks/629033148">Sebek & Rhea Silvia - Daedalus</option>
+    </select>
+    </td>
+    <td><img id="cover" style="max-width:300px;"></img></td>
+  </tr>
+</table>
+<input type="button" onclick ="exportCSV();" value="Export" />
+<pre id="log"></pre>
+<div id = "openDiag" title = "Add Track">
+  <label for="url">Enter URL or Embed-Code</label>
+  <input type="url" id="SCurl" placeholder="https://api.soundcloud.com/tracks/" pattern="https://.*" size="35" required>
+</div>
+<script>
+  var fileSelector = document.getElementById("selector"),
+  fileList = document.getElementById("fileList"),
+  pos = $('div[class="pos"]'),
+  playerInfo = $('div[class="Pinfo"]'),
+  player = $('audio[class="player"]'),
+  deck = $('div[class="SCpayer"]'),
+  prevSecs = -1,
+  prevMins = -1,
+  fileStore = [];
+
+  window.onload = function(){
+	  initMIDI();
+    initPlayers();
+    readTitles(addListEntry);
+  }
+
+  fileList.ondblclick = loadSelectedEntry;
+  window.onbeforeunload = killPlayer;
+
+  function loadSelectedEntry(autoplay = false){
+    const selectedIdx = fileList.selectedIndex;
+    if(selectedIdx < 0) return;
+    var audioElement = fileList.options[selectedIdx].value;
+    if(audioElement.startsWith('file')){
+      var x = audioElement.substring(5);
+      loadLocalFile(fileStore[x-1],autoplay);
+    } else {
+      loadSCTrackID(audioElement,autoplay);
+    }
+  }
+
+  function listChanged(){
+		selectedIdx = fileList.selectedIndex;
+		if(selectedIdx > -1){
+			  displayCover(fileList.options[selectedIdx].value);
+		}
+	}
+
+  $("#urlOpen").click(function() {
+      ($("#openDiag").dialog("isOpen") == false) ? $(
+        "#openDiag").dialog("open") : $("#openDiag").dialog("close") ;
+  });
+  $("#openDiag").dialog({autoOpen: false, width: 380,
+    buttons: {
+      Cancel: function() {
+        $(this).dialog("close");},
+      Add: function() {
+        addURL($("#SCurl").val());
+        $(this).dialog("close");}
+    },
+    close: function() {
+        document.getElementById("SCurl").value = "";
+    }});
+
+  fileList.addEventListener("change", listChanged); //not triggered via MIDI
+  fileList.addEventListener("keyup", (event) => {
+    const selectedIdx = fileList.selectedIndex; 
+    if(event.repeat || selectedIdx < 0)
+      return;
+
+    switch (event.key) {
+      case "Enter":
+        loadSelectedEntry();
+      break;
+      case " ": //Space-Key
+        var id = loadSelectedEntry(true);
+      break;  
+      case "Del":
+      case "Delete":
+        var audioElement = fileList.options[selectedIdx].value;
+        if(audioElement.startsWith('file')){
+          var x = audioElement.substring(5);
+          fileStore.splice(x-1, 1);
+        } else {
+          killTitle(audioElement);
+        }
+        fileList.remove(selectedIdx);
+      break;
+      default:
+        // printInfo(`Key "${event.key}" pressed [event: keydown]`);
+      return;
+    } 
+  },false);
+
+  // drag & drop files to list
+  fileList.addEventListener("dragenter", drag, false);
+  fileList.addEventListener("dragover", drag, false);
+  fileList.addEventListener("drop", (event) => {
+    drag(event);
+    const dt = event.dataTransfer;
+    addFiles(dt.files);
+  });
+
+  function drag(event) {
+    event.stopPropagation();
+    event.preventDefault();
+  }
+
+  function addListEntry(title,url){
+    var option = document.createElement("option");
+    option.text = title;
+    option.value = url;
+    fileList.add(option);
+  }
+
+  function addFiles(files){
+    Array.from(files).forEach(item => {
+      if(item.name.endsWith(".csv")){
+        importCSV(item);
+      } else {
+        var x = fileStore.push(item);
+        addListEntry(item.name,'file/' + x);
+      }
+    });
+  }
+
+// New File selected
+fileSelector.addEventListener('change', (event) => {
+  if(fileSelector.files.length > 0){
+    addFiles(fileSelector.files);
+  }
+});
+
+</script>
+</body>
